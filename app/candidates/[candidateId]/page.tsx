@@ -10,7 +10,6 @@ import { ArrowLeft, Vote, MapPin, Users, Building, BarChart3, PieChartIcon } fro
 import { getWards, getCenters, getVotes, getCandidates } from "@/lib/firebase-service"
 import { calculateCandidateTotals } from "@/lib/aggregation"
 import { CandidateBadge } from "@/components/candidate-badge"
-import { VoteSummaryCard } from "@/components/vote-summary-card"
 // Add chart components
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import { Bar, BarChart, Pie, PieChart, Cell, ResponsiveContainer, XAxis, YAxis, CartesianGrid } from "recharts"
@@ -34,6 +33,7 @@ export default function CandidatePage() {
   const [wards, setWards] = useState<Ward[]>([])
   const [centers, setCenters] = useState<Center[]>([])
   const [wardTotals, setWardTotals] = useState<VoteAggregation[]>([])
+  const [centerTotals, setCenterTotals] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -42,9 +42,10 @@ export default function CandidatePage() {
 
   const loadData = async () => {
     try {
-      const [wardsData, centersData, candidatesData] = await Promise.all([
+      const [wardsData, centersData, votesData, candidatesData] = await Promise.all([
         getWards(), 
         getCenters(), 
+        getVotes(),
         getCandidates()
       ])
 
@@ -57,6 +58,16 @@ export default function CandidatePage() {
       if (candidateData) {
         const totalsData = await calculateCandidateTotals(candidateId)
         setWardTotals(totalsData)
+        
+        // Calculate votes per center for this candidate
+        const centerVotes: Record<string, number> = {}
+        votesData.forEach(vote => {
+          const center = centersData.find(c => c.id === vote.centerId)
+          if (center && vote.counts[candidateId]) {
+            centerVotes[center.id] = (centerVotes[center.id] || 0) + vote.counts[candidateId]
+          }
+        })
+        setCenterTotals(centerVotes)
       }
     } catch (error) {
       console.error("Error loading data:", error)
@@ -72,6 +83,19 @@ export default function CandidatePage() {
     percentage: wardTotal.percentage,
     fill: CHART_COLORS[index % CHART_COLORS.length],
   }))
+
+  // Prepare data for center distribution chart
+  const centerChartData = centers
+    .map((center, index) => {
+      const votes = centerTotals[center.id] || 0
+      return {
+        name: center.name.length > 15 ? `${center.name.substring(0, 15)}...` : center.name,
+        votes,
+        fill: CHART_COLORS[index % CHART_COLORS.length],
+      }
+    })
+    .sort((a, b) => b.votes - a.votes) // Sort by votes
+    .slice(0, 10) // Show top 10 centers
 
   if (loading) {
     return (
@@ -210,18 +234,18 @@ export default function CandidatePage() {
           </CardContent>
         </Card>
 
-        {/* Pie Chart */}
+        {/* Center Distribution Pie Chart */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <PieChartIcon className="w-5 h-5" />
-              Ward Distribution
+              Center Distribution
             </CardTitle>
           </CardHeader>
           <CardContent>
             <ChartContainer
               config={Object.fromEntries(
-                chartData.map((item, index) => [
+                centerChartData.map((item, index) => [
                   `item-${index}`,
                   {
                     label: `${item.name} (${item.votes} votes)`,
@@ -234,13 +258,13 @@ export default function CandidatePage() {
               <PieChart>
                 <ChartTooltip content={<ChartTooltipContent hideLabel />} />
                 <Pie
-                  data={chartData}
+                  data={centerChartData}
                   dataKey="votes"
                   nameKey="name"
                   innerRadius={60}
                   strokeWidth={5}
                 >
-                  {chartData.map((entry, index) => (
+                  {centerChartData.map((entry, index) => (
                     <Cell 
                       key={`cell-${index}`} 
                       fill={CHART_COLORS[index % CHART_COLORS.length]} 
@@ -301,40 +325,37 @@ export default function CandidatePage() {
           </Card>
         </div>
 
-        {/* Candidate Summary */}
+        {/* Top Performing Centers */}
         <div className="space-y-6">
-          <VoteSummaryCard title="Candidate Summary" totalVotes={totalVotes} registeredVoters={totalRegisteredVoters} />
-
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Building className="w-5 h-5" />
-                Top Performing Wards
+                Top Performing Centers
               </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {wardTotals
-                  .sort((a, b) => b.totalVotes - a.totalVotes)
-                  .slice(0, 5)
-                  .map((wardTotal, index) => {
-                    const ward = wards.find(w => w.id === wardTotal.candidate.id)
-                    if (!ward) return null
-                    
-                    return (
-                      <div key={ward.id} className="flex items-center gap-3">
-                        <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs">
-                          {index + 1}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{ward.name}</div>
-                          <div className="text-sm text-muted-foreground">
-                            {wardTotal.totalVotes.toLocaleString()} votes ({wardTotal.percentage.toFixed(1)}%)
-                          </div>
+                {centers
+                  .map((center, index) => {
+                    const votes = centerTotals[center.id] || 0
+                    return { center, votes, index }
+                  })
+                  .sort((a, b) => b.votes - a.votes)
+                  .slice(0, 3) // Show only top 3 centers
+                  .map(({ center, votes, index }) => (
+                    <div key={center.id} className="flex items-center gap-3">
+                      <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs">
+                        {index + 1}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{center.name}</div>
+                        <div className="text-sm text-muted-foreground">
+                          {votes.toLocaleString()} votes
                         </div>
                       </div>
-                    )
-                  })}
+                    </div>
+                  ))}
               </div>
             </CardContent>
           </Card>
